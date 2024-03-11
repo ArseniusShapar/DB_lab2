@@ -9,15 +9,15 @@ def find_index(key: int, keys: list[int]) -> int:
     if not keys:
         return 0
 
-    flag = False
-    for i, k in enumerate(keys):
-        if key < k:
-            flag = True
-            break
-    if not flag:
-        i = len(keys)
+    if key >= keys[-1]:
+        return len(keys)
 
-    return i
+    if key < keys[0]:
+        return 0
+
+    for i in range(len(keys) - 1):
+        if keys[i] <= key < keys[i + 1]:
+            return i + 1
 
 
 def hash_name(name: str) -> int:
@@ -40,7 +40,7 @@ phones = [f'+3800000000{"0" + str(i) if i < 10 else i}' for i in range(1, 27)]
 
 
 class Node:
-    def __init__(self, keys: list[int] = None, childs: list['Node', 'Leaf'] = None):
+    def __init__(self, keys: list[int] = None, childs: list['Node'] = None):
         if keys is None:
             keys = []
         if childs is None:
@@ -68,28 +68,39 @@ class Node:
         return
 
     def split(self) -> 'Node':
-        mid = len(self.keys) // 2
+        i = self.min_order if len(set(self.keys[len(self.keys) // 2 + 1:])) == 1 else 0
+        mid = i if i >= self.min_order else len(self.keys) // 2
         new_node = Node(self.keys[mid:], self.childs[mid + 1:])
         self.keys = self.keys[:mid]
         self.childs = self.childs[:mid + 1]
         return new_node
 
     def delete_child(self, child: 'Node') -> None:
-        i = self.childs.index(child)
-        self.keys.pop(i)
-        self.childs.pop(i)
+        i = min((self.childs.index(child), len(self.keys) - 1))
+        if self.keys:
+            self.keys.pop(i)
+        deleted_child: Leaf = self.childs.pop(i)
+        if type(deleted_child) == Leaf:
+            if deleted_child.left_neighbour is not None:
+                deleted_child.left_neighbour.right_neighbour = deleted_child.right_neighbour
+            if deleted_child.right_neighbour is not None:
+                deleted_child.right_neighbour.left_neighbour = deleted_child.left_neighbour
+        del deleted_child
 
 
 class Leaf(Node):
     def __init__(self, keys: list[int] = None,
-                 values: list[Record] = None, neighbour: 'Leaf' = None):
+                 values: list[Record] = None,
+                 left_neighbour: 'Leaf' = None,
+                 right_neighbour: 'Leaf' = None):
         super().__init__(keys)
         # del self.childs
 
         if values is None:
             values = []
 
-        self.neighbour = neighbour
+        self.left_neighbour = left_neighbour
+        self.right_neighbour = right_neighbour
         self.values = values
 
     def __str__(self) -> str:
@@ -101,11 +112,14 @@ class Leaf(Node):
         self.values.insert(i, value)
 
     def split(self) -> 'Leaf':
-        mid = self.max_order // 2
-        new_leaf = Leaf(self.keys[mid:], self.values[mid:], self.neighbour)
+        i = self.min_order if len(set(self.keys[len(self.keys) // 2 + 1:])) == 1 else 0
+        mid = i if i >= self.min_order else len(self.keys) // 2
+        new_leaf = Leaf(self.keys[mid:], self.values[mid:], left_neighbour=self, right_neighbour=self.right_neighbour)
+        if self.right_neighbour is not None:
+            self.right_neighbour.left_neighbour = new_leaf
         self.keys = self.keys[:mid]
         self.values = self.values[:mid]
-        self.neighbour = new_leaf
+        self.right_neighbour = new_leaf
         return new_leaf
 
     def delete(self, key: int) -> None:
@@ -135,66 +149,41 @@ class BPlusTree:
         if type(node) == Leaf:
             return node
 
-        for i, k in enumerate(node.keys):
-            if key < k:
-                return self.__search_leaf(key, node.childs[i])
-
-        return self.__search_leaf(key, node.childs[-1])
+        i = find_index(key, node.keys)
+        return self.__search_leaf(key, node.childs[i])
 
     def _search_leaf(self, key: int) -> Leaf:
         return self.__search_leaf(key, self.root)
 
-    def search(self, name: str = '', key: int = None) -> list[str]:
-        key = hash_name(name) if key is None else key
-        leaf = self._search_leaf(key)
-        values = [value for k, value in zip(leaf.keys, leaf.values) if k == key]
-        leaf = leaf.neighbour
-        end = False
-        while (not end) and (leaf is not None):
-            for k, value in zip(leaf.keys, leaf.values):
-                if k == key:
-                    values.append(value)
-                else:
-                    end = True
-                    break
-            leaf = leaf.neighbour
-
-        return values
-
-    def __left_leaf(self, node: Node) -> Leaf:
-        if type(node) == Leaf:
-            return node
-
-        return self.__left_leaf(node.childs[0])
-
-    def _left_leaf(self) -> Leaf:
-        return self.__left_leaf(self.root)
-
-    def search_left(self, name: str = '', key: int = None) -> list[str]:
-        key = hash_name(name) if key is None else key
-        leaf = self._left_leaf()
+    def _search(self, leaf: Leaf, key: int, direct=-1, condition=lambda x, y: x == y) -> list[Record]:
         values = []
-        end = False
-        while (not end) and (leaf is not None):
-            for k, value in zip(leaf.keys, leaf.values):
-                if k < key:
-                    values.append(value)
-                else:
-                    end = True
-                    break
-            leaf = leaf.neighbour
-
+        while leaf is not None:
+            if all([not (condition(k, key) or key == k) for k in leaf.keys]):
+                break
+            values += [value for k, value in zip(leaf.keys, leaf.values) if condition(k, key)]
+            leaf = leaf.left_neighbour if direct == -1 else leaf.right_neighbour if direct == 1 else None
         return values
 
-    def search_right(self, name: str = '', key: int = None) -> list[str]:
+    def search(self, name: str = '', key: int = None) -> list[Record]:
         key = hash_name(name) if key is None else key
         leaf = self._search_leaf(key)
-        values = [value for k, value in zip(leaf.keys, leaf.values) if k > key]
-        leaf = leaf.neighbour
+        values = self._search(leaf, key, direct=-1)
+        values += self._search(leaf.right_neighbour, key, direct=1)
+        values.sort(key=lambda item: item[0])
+        return values
 
-        while leaf is not None:
-            values += [value for value in leaf.values]
-            leaf = leaf.neighbour
+    def search_left(self, name: str = '', key: int = None) -> list[Record]:
+        key = hash_name(name) if key is None else key
+        leaf = self._search_leaf(key)
+        values = self._search(leaf, key, direct=-1, condition=lambda x, y: x < y)
+        values.sort(key=lambda item: item[0])
+        return values
+
+    def search_right(self, name: str = '', key: int = None) -> list[Record]:
+        key = hash_name(name) if key is None else key
+        leaf = self._search_leaf(key)
+        values = self._search(leaf, key, direct=1, condition=lambda x, y: x > y)
+        values.sort(key=lambda item: item[0])
         return values
 
     def _parent(self, node: Node) -> Node:
@@ -205,14 +194,8 @@ class BPlusTree:
                 if child is node:
                     return current_node
 
-            flag = False
-            for i, k in enumerate(current_node.keys):
-                if node.keys[0] < k:
-                    current_node = current_node.childs[i]
-                    flag = True
-                    break
-            if not flag:
-                current_node = current_node.childs[-1]
+            i = find_index(node.keys[0], current_node.keys)
+            current_node = current_node.childs[i]
 
     def insert(self, name: str = '', phone: str = '', key: int = None) -> None:
         key = hash_name(name) if key is None else key
@@ -239,14 +222,14 @@ class BPlusTree:
 
         new_node = parent.split()
 
-        if type(parent) != Root:
-            self.root.add_child(new_node)
-            new_node.keys.pop(0)
+        if (type(parent) == Root) or (len(self.root) == self.root.max_order):
+            mid_key = new_node.keys.pop(0)
+            new_root = Root([mid_key], [Node(self.root.keys, self.root.childs), new_node])
+            self.root = new_root
             return
 
-        mid_key = new_node.keys.pop(0)
-        new_root = Root([mid_key], [Node(self.root.keys, self.root.childs), new_node])
-        self.root = new_root
+        self.root.add_child(new_node)
+        new_node.keys.pop(0)
 
     def delete(self, name: str = '', key: int = None) -> None:
         key = hash_name(name) if key is None else key
@@ -254,7 +237,7 @@ class BPlusTree:
 
         leaf.delete(key)
 
-        if (len(leaf) >= leaf.min_order) or (len(leaf) == 0):
+        if len(leaf) >= leaf.min_order:
             return
 
         will_insert = [(leaf.keys[0], leaf.values[0])]
@@ -262,10 +245,14 @@ class BPlusTree:
         parent = self._parent(leaf)
         parent.delete_child(leaf)
 
+        if (len(parent) == 0) and (type(parent) == Root):
+            self.root = self.root.childs[0]
+
         if (len(parent) < parent.min_order) and (type(parent) != Root):
             for leaf in parent.childs:
                 will_insert += [(k, v) for k, v in zip(leaf.keys, leaf.values)]
-
+            for leaf in parent.childs[::]:
+                parent.delete_child(leaf)
             self.root.delete_child(parent)
 
         for k, v in will_insert:
@@ -278,18 +265,8 @@ if __name__ == '__main__':
     # for i, phone in enumerate(phones):
     #     tree.insert(key=i + 1, phone=phone)
 
-    # for name, phone in zip(names, phones):
-    #     tree.insert(name=name, phone=phone)
-
-    for k in [22, 89, 16, 9, 88, 100, 40, 89, 84, 47, 56, 3, 88, 87, 96]:
-        tree.insert(key=k, phone=phones[k % 26])
-
+    for name, phone in zip(names, phones):
+        tree.insert(name=name, phone=phone)
 
     print(tree)
     print()
-
-    # tree.delete(key=0)
-
-    # tree.delete(key=22)
-    # tree.insert(key=56)
-    print(tree.search_right(key=56))

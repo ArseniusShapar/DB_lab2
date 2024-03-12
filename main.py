@@ -1,5 +1,5 @@
 import sys
-
+from copy import deepcopy
 import numpy as np
 
 Record = tuple[str, str]
@@ -251,7 +251,7 @@ class BPlusTree:
         if (len(parent) < parent.min_order) and (type(parent) != Root):
             for leaf in parent.childs:
                 will_insert += [(k, v) for k, v in zip(leaf.keys, leaf.values)]
-            for leaf in parent.childs[::]:
+            for leaf in deepcopy(parent.childs):
                 parent.delete_child(leaf)
             self.root.delete_child(parent)
 
